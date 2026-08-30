@@ -1,62 +1,78 @@
-name: Build Qt WebEngine v6.11.2 with Codecs
+name: Build Qt WebEngine v6.11.2 Windows with Codecs
 
 on:
-  workflow_dispatch: # Jalankan manual lewat tombol di web GitHub
+  push:
+    tags:
+      - 'v*' # Otomatis berjalan jika Anda membuat tag versi baru (misal: v1.0.0)
+  workflow_dispatch: # Memungkinkan tombol manual di tab Actions GitHub
 
 jobs:
-  build-linux:
-    runs-on: ubuntu-24.04
+  build-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write # Wajib agar bot bisa mengunggah file ke tab GitHub Releases
 
     steps:
-      - name: Maximize Disk Space
-        uses: easimon/maximize-build-space@master
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          root-reserve-mb: 5120
-          swap-size-mb: 10240
-          remove-dotnet: 'true'
-          remove-android: 'true'
-          remove-haskell: 'true'
+          python-version: '3.11'
 
-      - name: Install System Dependencies
+      - name: Install Build Tools via Chocolatey
         run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake ninja-build gperf bison flex nodejs \
-            libnss3-dev libdbus-1-dev libxcomposite-dev libxcursor-dev \
-            libxi-dev libxtst-dev libxrandr-dev libasound2-dev \
-            libpulse-dev libgl1-mesa-dev libegl1-mesa-dev python3-pip
+          choco install ninja gperf bison flex nasm -y
+          # Pastikan Node.js terinstal untuk engine Chromium
+          choco install nodejs-lts -y
 
-      - name: Install Qt Base via aqtinstall
+      - name: Install Qt Base SDK via aqtinstall
+        shell: pwsh
         run: |
           pip install aqtinstall
-          # Mengunduh SDK Qt Base v6.11.2 resmi untuk Linux x64
-          aqt install-qt linux desktop 6.11.2 gcc_64 -m qtwebengine
+          # Mengunduh Qt Base 6.11.2 resmi untuk arsitektur Windows MSVC 2022 64-bit
+          aqt install-qt windows desktop 6.11.2 win64_msvc2022_64 -m qtwebengine
 
       - name: Clone Qt WebEngine Source v6.11.2
+        shell: bash
         run: |
-          # Melakukan clone spesifik pada tag v6.11.2 secara rekursif (untuk submodule Chromium)
+          # Melakukan clone repositori Qt WebEngine secara rekursif (untuk submodule Chromium internal)
           git clone https://qt.io --branch v6.11.2 --recursive --depth 1
 
-      - name: Configure and Build Qt WebEngine
+      - name: Configure and Build Qt WebEngine (MSVC)
+        shell: cmd
         run: |
+          :: Mengaktifkan lingkungan compiler MSVC 2022 x64 Native secara otomatis
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          
           cd qtwebengine
           mkdir build && cd build
           
-          # Setup environment variable untuk path Qt 6.11.2
-          export QT_DIR=$GITHUB_WORKSPACE/Qt/6.11.2/gcc_64
-          export PATH=$QT_DIR/bin:$PATH
+          :: Menentukan Path ke binary Qt SDK yang diinstal oleh aqt
+          set "QT_DIR=%GITHUB_WORKSPACE%\Qt\6.11.2\msvc2022_64"
+          set "PATH=%QT_DIR%\bin;%PATH%"
           
-          # Konfigurasi CMake dengan flag pengaktifan proprietary codecs (H.264, MP4, AAC)
-          cmake .. -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DQT_FEATURE_webengine_proprietary_codecs=ON \
-            -DCMAKE_INSTALL_PREFIX=$GITHUB_WORKSPACE/output
+          :: Konfigurasi CMake dengan compiler MSVC dan flag Codec Proprietary (H.264, MP4, AAC)
+          cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release ^
+            -DQT_FEATURE_webengine_proprietary_codecs=ON ^
+            -DCMAKE_INSTALL_PREFIX="%GITHUB_WORKSPACE%\output"
           
-          # Mulai proses kompilasi Chromium + Core Qt
+          :: Mulai proses kompilasi (Sangat berat, Ninja otomatis mengoptimalkan core CPU)
           cmake --build .
           cmake --install .
 
-      - name: Upload Build Artifacts
-        uses: actions/upload-artifact@v4
+      - name: Archive Windows Binaries
+        shell: pwsh
+        run: |
+          cd $env:GITHUB_WORKSPACE\output
+          # Kompres hasil build menjadi file ZIP siap pakai
+          Compress-Archive -Path * -DestinationPath ..\qtwebengine-windows-6.11.2-codecs.zip
+
+      - name: Upload Binary to GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
         with:
-          name: qtwebengine-linux-6.11.2-codecs
-          path: ${{ github.workspace }}/output/
+          files: qtwebengine-windows-6.11.2-codecs.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
