@@ -139,11 +139,21 @@ jobs:
           :: Ensure Qt is in the path
           set "PATH=%QT_DIR%\bin;%PATH%"
 
-          :: Configure CMake to skip QtPdf
+          :: Konfigurasi CMake dengan compiler MSVC dan flag Codec Proprietary (H.264, MP4, AAC)
+          :: Fitur-fitur besar yang tidak dipakai (WebRTC, spellchecker, extensions, dst)
+          :: dimatikan untuk memangkas scope compile Chromium -- ini kontributor waktu
+          :: compile terbesar setelah Blink core sendiri. Kalau salah satu ternyata
+          :: dibutuhkan di app lain, tinggal hapus baris -D terkait dan build lagi.
           cmake "%GITHUB_WORKSPACE%\qtwebengine" -G Ninja -DCMAKE_BUILD_TYPE=Release ^
             -DCMAKE_PREFIX_PATH="%QT_DIR%" ^
             -DQT_FEATURE_webengine_proprietary_codecs=ON ^
             -DQT_FEATURE_qtpdf_build=OFF ^
+            -DQT_FEATURE_webengine_printing_and_pdf=OFF ^
+            -DQT_FEATURE_webengine_spellchecker=OFF ^
+            -DQT_FEATURE_webengine_webrtc=OFF ^
+            -DQT_FEATURE_webengine_extensions=OFF ^
+            -DQT_FEATURE_webengine_geolocation=OFF ^
+            -DQT_FEATURE_webengine_kerberos=OFF ^
             -DCMAKE_INSTALL_PREFIX="%GITHUB_WORKSPACE%\output"
 
           :: Throttle parallelism to prevent runner memory exhaustion
