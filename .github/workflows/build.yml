@@ -30,9 +30,11 @@ jobs:
       - name: Install Qt Base SDK via aqtinstall
         shell: pwsh
         run: |
-          pip install aqtinstall
-          # Mengunduh Qt Base 6.11.2 resmi untuk arsitektur Windows MSVC 2022 64-bit
-          aqt install-qt windows desktop 6.11.2 win64_msvc2022_64 -m qtwebengine
+          pip install -U aqtinstall
+          # Cek versi 6.11.x apa saja yang benar-benar sudah dipublish di repo aqt
+          aqt list-qt windows desktop --spec "6.11"
+          # Mengunduh Qt Base terbaru dari seri 6.11 (tanpa -m qtwebengine karena kita build dari source)
+          aqt install-qt windows desktop 6.11 win64_msvc2022_64
 
       - name: Clone Qt WebEngine Source v6.11.2
         shell: bash
