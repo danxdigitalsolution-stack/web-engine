@@ -1,0 +1,62 @@
+name: Build Qt WebEngine v6.11.2 with Codecs
+
+on:
+  workflow_dispatch: # Jalankan manual lewat tombol di web GitHub
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Maximize Disk Space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 5120
+          swap-size-mb: 10240
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build gperf bison flex nodejs \
+            libnss3-dev libdbus-1-dev libxcomposite-dev libxcursor-dev \
+            libxi-dev libxtst-dev libxrandr-dev libasound2-dev \
+            libpulse-dev libgl1-mesa-dev libegl1-mesa-dev python3-pip
+
+      - name: Install Qt Base via aqtinstall
+        run: |
+          pip install aqtinstall
+          # Mengunduh SDK Qt Base v6.11.2 resmi untuk Linux x64
+          aqt install-qt linux desktop 6.11.2 gcc_64 -m qtwebengine
+
+      - name: Clone Qt WebEngine Source v6.11.2
+        run: |
+          # Melakukan clone spesifik pada tag v6.11.2 secara rekursif (untuk submodule Chromium)
+          git clone https://qt.io --branch v6.11.2 --recursive --depth 1
+
+      - name: Configure and Build Qt WebEngine
+        run: |
+          cd qtwebengine
+          mkdir build && cd build
+          
+          # Setup environment variable untuk path Qt 6.11.2
+          export QT_DIR=$GITHUB_WORKSPACE/Qt/6.11.2/gcc_64
+          export PATH=$QT_DIR/bin:$PATH
+          
+          # Konfigurasi CMake dengan flag pengaktifan proprietary codecs (H.264, MP4, AAC)
+          cmake .. -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DQT_FEATURE_webengine_proprietary_codecs=ON \
+            -DCMAKE_INSTALL_PREFIX=$GITHUB_WORKSPACE/output
+          
+          # Mulai proses kompilasi Chromium + Core Qt
+          cmake --build .
+          cmake --install .
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: qtwebengine-linux-6.11.2-codecs
+          path: ${{ github.workspace }}/output/
