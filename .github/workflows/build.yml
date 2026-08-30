@@ -37,7 +37,10 @@ jobs:
           # Cek versi 6.11.x apa saja yang benar-benar sudah dipublish di repo aqt
           aqt list-qt windows desktop --spec "6.11"
           # Mengunduh Qt Base terbaru dari seri 6.11 (tanpa -m qtwebengine karena kita build dari source)
-          aqt install-qt windows desktop 6.11 win64_msvc2022_64
+          # PENTING: --outputdir di-set eksplisit ke "Qt" karena default aqt SEBENARNYA
+          # adalah "./<version>/<arch>" (TANPA folder "Qt"), bukan "./Qt/<version>/<arch>"
+          # seperti asumsi sebelumnya — itu yang bikin Get-ChildItem gagal nemuin folder Qt.
+          aqt install-qt windows desktop 6.11 win64_msvc2022_64 --outputdir "$env:GITHUB_WORKSPACE\Qt"
 
           # PENTING: karena versinya "mengambang" (bisa 6.11.1, 6.11.2, 6.11.3, dst
           # tergantung patch terbaru yang tersedia saat build jalan), kita HARUS
