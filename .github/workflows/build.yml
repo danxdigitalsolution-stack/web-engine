@@ -8,7 +8,11 @@ on:
 
 jobs:
   build-windows:
-    runs-on: windows-latest
+    # PENTING: windows-latest = windows-2025 punya bug SDK: klaim punya Windows SDK
+    # 10.0.26100.0 tapi salah terinstall, jadi vcvarsall fallback ke SDK 10240 yang purba
+    # (lihat actions/runner-images#13310). QtWebEngine 6.11 butuh SDK 26100 minimum,
+    # jadi pindah ke windows-2022 + install SDK 26100 eksplisit lewat action di bawah.
+    runs-on: windows-2022
     permissions:
       contents: write # Wajib agar bot bisa mengunggah file ke tab GitHub Releases
 
@@ -23,9 +27,35 @@ jobs:
 
       - name: Install Build Tools via Chocolatey
         run: |
-          choco install ninja gperf bison flex nasm -y
+          # PENTING: paket choco "flex" dan "bison" sudah lama dikenal bermasalah/broken
+          # di Windows (link download basi). Ganti pakai winflexbison3, yang menyediakan
+          # win_flex.exe/win_bison.exe -- lalu di-rename ke flex.exe/bison.exe di step
+          # berikutnya, karena QtWebEngine configure cari nama itu persis.
+          choco install ninja gperf winflexbison3 nasm strawberryperl -y
           # Pastikan Node.js terinstal untuk engine Chromium
           choco install nodejs-lts -y
+
+      - name: Rename win_flex/win_bison and expose on PATH
+        shell: pwsh
+        run: |
+          $wfbDir = "C:\ProgramData\chocolatey\lib\winflexbison3\tools"
+          if (-not (Test-Path $wfbDir)) {
+            # Fallback: cari otomatis kalau lokasi paket berubah
+            $wfbDir = (Get-ChildItem "C:\ProgramData\chocolatey\lib\winflexbison3" -Recurse -Filter "win_flex.exe" | Select-Object -First 1).DirectoryName
+          }
+          if (-not $wfbDir) { throw "Tidak menemukan folder instalasi winflexbison3" }
+
+          Copy-Item (Join-Path $wfbDir "win_flex.exe") (Join-Path $wfbDir "flex.exe") -Force
+          Copy-Item (Join-Path $wfbDir "win_bison.exe") (Join-Path $wfbDir "bison.exe") -Force
+
+          Write-Host "flex/bison siap di: $wfbDir"
+          $wfbDir | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Install Windows 11 SDK 26100
+        uses: ChristopheLav/windows-sdk-install@v1
+        with:
+          version-sdk: "26100"
+          features: "OptionId.DesktopCPPx64,OptionId.DesktopCPPx86"
 
       - name: Pin CMake to a known-good version
         uses: lukka/get-cmake@latest
@@ -40,6 +70,10 @@ jobs:
       - name: Install Qt Base SDK via aqtinstall
         shell: pwsh
         run: |
+          # QtWebEngine configure butuh modul Python html5lib; kalau tidak ada,
+          # konfigurasi diam-diam menonaktifkan build WebEngine (bukan error keras di awal).
+          pip install html5lib
+
           # PyPI release 3.3.0 belum berisi fix untuk perubahan struktur folder Qt 6.11+
           # (lihat https://github.com/miurahr/aqtinstall/pull/1000, sudah merged ke master
           # tapi belum dirilis). Install langsung dari GitHub master sebagai workaround.
@@ -94,7 +128,9 @@ jobs:
         shell: cmd
         run: |
           :: Activate MSVC 2022 environment
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          :: SDK 26100 di-set eksplisit sebagai argumen supaya vcvars tidak salah
+          :: pilih SDK lain yang lebih lama (lihat catatan windows-2022 di atas).
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat" 10.0.26100.0
 
           :: Create a short build path to avoid MAX_PATH limits
           mkdir C:\b
