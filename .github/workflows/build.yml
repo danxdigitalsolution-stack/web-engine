@@ -115,6 +115,8 @@ jobs:
           cmake ..\qtwebengine -G Ninja -DCMAKE_BUILD_TYPE=Release ^
             -DCMAKE_PREFIX_PATH="%QT_DIR%" ^
             -DQT_FEATURE_webengine_proprietary_codecs=ON ^
+            -DQT_FEATURE_pdf=OFF
+            -DQT_FEATURE_pdf_v8=OFF
             -DCMAKE_INSTALL_PREFIX="%GITHUB_WORKSPACE%\output"
 
           :: Mulai proses kompilasi (Sangat berat, Ninja otomatis mengoptimalkan core CPU)
