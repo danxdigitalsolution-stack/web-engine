@@ -30,7 +30,10 @@ jobs:
       - name: Install Qt Base SDK via aqtinstall
         shell: pwsh
         run: |
-          pip install -U aqtinstall
+          # PyPI release 3.3.0 belum berisi fix untuk perubahan struktur folder Qt 6.11+
+          # (lihat https://github.com/miurahr/aqtinstall/pull/1000, sudah merged ke master
+          # tapi belum dirilis). Install langsung dari GitHub master sebagai workaround.
+          pip install -U "git+https://github.com/miurahr/aqtinstall.git@master"
           # Cek versi 6.11.x apa saja yang benar-benar sudah dipublish di repo aqt
           aqt list-qt windows desktop --spec "6.11"
           # Mengunduh Qt Base terbaru dari seri 6.11 (tanpa -m qtwebengine karena kita build dari source)
