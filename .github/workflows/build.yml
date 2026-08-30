@@ -23,7 +23,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.13'
 
       - name: Install Build Tools via Chocolatey
         run: |
@@ -120,9 +120,23 @@ jobs:
         if: steps.cache-qtwebengine.outputs.cache-hit != 'true'
         shell: bash
         run: |
-          # Clone tag WebEngine yang PERSIS sama dengan versi Qt Base yang terinstall,
-          # supaya tidak ada mismatch versi antara qtbase dan qtwebengine.
-          git clone https://code.qt.io/qt/qtwebengine.git --branch "v${QT_VERSION}" --recursive --depth 1
+          # code.qt.io kadang overload (HTTP 503) pas nge-fetch submodule Chromium
+          # (src/3rdparty) yang ukurannya gede, bikin packfile transfer keputus di tengah.
+          # Ini transient, jadi kita retry otomatis alih-alih langsung fail.
+          MAX_RETRIES=5
+          DELAY=30
+          for i in $(seq 1 $MAX_RETRIES); do
+            echo "Percobaan clone ke-$i dari $MAX_RETRIES..."
+            rm -rf qtwebengine
+            if git clone https://code.qt.io/qt/qtwebengine.git --branch "v${QT_VERSION}" --recursive --depth 1; then
+              echo "Clone berhasil."
+              exit 0
+            fi
+            echo "Clone gagal (percobaan $i), tunggu ${DELAY}s sebelum retry..."
+            sleep $DELAY
+          done
+          echo "Clone tetap gagal setelah $MAX_RETRIES percobaan."
+          exit 1
 
       - name: Configure and Build Qt WebEngine (MSVC)
         shell: cmd
