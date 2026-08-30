@@ -1,4 +1,4 @@
-name: Build Qt WebEngine v6.11.2 Windows with Codecs
+name: Build Qt WebEngine 6.11.x Windows with Codecs
 
 on:
   push:
@@ -39,30 +39,65 @@ jobs:
           # Mengunduh Qt Base terbaru dari seri 6.11 (tanpa -m qtwebengine karena kita build dari source)
           aqt install-qt windows desktop 6.11 win64_msvc2022_64
 
-      - name: Clone Qt WebEngine Source v6.11.2
+          # PENTING: karena versinya "mengambang" (bisa 6.11.1, 6.11.2, 6.11.3, dst
+          # tergantung patch terbaru yang tersedia saat build jalan), kita HARUS
+          # deteksi folder hasil install secara dinamis alih-alih hardcode path.
+          # Hardcode path di sini adalah penyebab error "Could not find Qt6" kemarin.
+          $qtVersionDir = Get-ChildItem "$env:GITHUB_WORKSPACE\Qt" -Directory |
+            Where-Object { $_.Name -match '^6\.11\.\d+$' } |
+            Sort-Object Name -Descending |
+            Select-Object -First 1
+          if (-not $qtVersionDir) { throw "Gagal mendeteksi folder versi Qt hasil instalasi aqt" }
+
+          $qtDir = Join-Path $qtVersionDir.FullName "msvc2022_64"
+          if (-not (Test-Path $qtDir)) { throw "Folder toolchain Qt tidak ditemukan: $qtDir" }
+
+          Write-Host "Qt terinstall di: $qtDir (versi $($qtVersionDir.Name))"
+
+          # Simpan sebagai env var supaya step-step berikutnya (termasuk shell cmd)
+          # tidak perlu menebak-nebak path lagi.
+          "QT_DIR=$qtDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "QT_VERSION=$($qtVersionDir.Name)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "$qtDir\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Cache Qt WebEngine source
+        id: cache-qtwebengine
+        uses: actions/cache@v4
+        with:
+          path: qtwebengine
+          # Key mengikuti versi Qt yang benar-benar terinstall, jadi cache otomatis
+          # invalidate kalau patch Qt naik (misal dari 6.11.2 ke 6.11.3).
+          key: qtwebengine-src-${{ env.QT_VERSION }}-${{ runner.os }}
+
+      - name: Clone Qt WebEngine Source
+        if: steps.cache-qtwebengine.outputs.cache-hit != 'true'
         shell: bash
         run: |
-          # Melakukan clone repositori Qt WebEngine secara rekursif (untuk submodule Chromium internal)
-          git clone https://code.qt.io/qt/qtwebengine.git --branch v6.11.2 --recursive --depth 1
+          # Clone tag WebEngine yang PERSIS sama dengan versi Qt Base yang terinstall,
+          # supaya tidak ada mismatch versi antara qtbase dan qtwebengine.
+          git clone https://code.qt.io/qt/qtwebengine.git --branch "v${QT_VERSION}" --recursive --depth 1
 
       - name: Configure and Build Qt WebEngine (MSVC)
         shell: cmd
         run: |
           :: Mengaktifkan lingkungan compiler MSVC 2022 x64 Native secara otomatis
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          
+
           cd qtwebengine
-          mkdir build && cd build
-          
-          :: Menentukan Path ke binary Qt SDK yang diinstal oleh aqt
-          set "QT_DIR=%GITHUB_WORKSPACE%\Qt\6.11.2\msvc2022_64"
+          if not exist build mkdir build
+          cd build
+
+          :: QT_DIR sudah di-set sebagai env var di step "Install Qt Base SDK via aqtinstall"
           set "PATH=%QT_DIR%\bin;%PATH%"
-          
+
           :: Konfigurasi CMake dengan compiler MSVC dan flag Codec Proprietary (H.264, MP4, AAC)
+          :: CMAKE_PREFIX_PATH di-set eksplisit karena find_package(Qt6) butuh ini,
+          :: sekadar menaruh qmake di PATH saja tidak cukup untuk CMake Config mode.
           cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release ^
+            -DCMAKE_PREFIX_PATH="%QT_DIR%" ^
             -DQT_FEATURE_webengine_proprietary_codecs=ON ^
             -DCMAKE_INSTALL_PREFIX="%GITHUB_WORKSPACE%\output"
-          
+
           :: Mulai proses kompilasi (Sangat berat, Ninja otomatis mengoptimalkan core CPU)
           cmake --build .
           cmake --install .
@@ -72,12 +107,12 @@ jobs:
         run: |
           cd $env:GITHUB_WORKSPACE\output
           # Kompres hasil build menjadi file ZIP siap pakai
-          Compress-Archive -Path * -DestinationPath ..\qtwebengine-windows-6.11.2-codecs.zip
+          Compress-Archive -Path * -DestinationPath ..\qtwebengine-windows-$env:QT_VERSION-codecs.zip
 
       - name: Upload Binary to GitHub Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: qtwebengine-windows-6.11.2-codecs.zip
+          files: qtwebengine-windows-${{ env.QT_VERSION }}-codecs.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
