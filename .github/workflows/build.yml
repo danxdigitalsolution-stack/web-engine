@@ -93,29 +93,21 @@ jobs:
       - name: Configure and Build Qt WebEngine (MSVC)
         shell: cmd
         run: |
-          :: Mengaktifkan lingkungan compiler MSVC 2022 x64 Native secara otomatis
+          :: Activate MSVC 2022 environment
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
 
-          :: PENTING: folder build sengaja ditaruh DI LUAR "qtwebengine" (yang di-cache)
-          :: supaya artefak build/install tidak pernah ikut ke-cache bareng source.
-          :: Dulu build/ ada di dalam qtwebengine/, jadi kalau ada run yang gagal
-          :: di tengah proses, actions/cache tetap menyimpan state parsialnya (post-step
-          :: cache tetap jalan meski job gagal) dan bikin run berikutnya nabrak
-          :: "cmake --install" ("File exists") karena mencoba menimpa file yang sudah ada.
-          if exist build rmdir /s /q build
-          mkdir build
-          cd build
+          :: Create a short build path to avoid MAX_PATH limits
+          mkdir C:\b
+          cd C:\b
 
-          :: QT_DIR sudah di-set sebagai env var di step "Install Qt Base SDK via aqtinstall"
+          :: Ensure Qt is in the path
           set "PATH=%QT_DIR%\bin;%PATH%"
 
-          :: Konfigurasi CMake dengan compiler MSVC dan flag Codec Proprietary (H.264, MP4, AAC)
-          :: CMAKE_PREFIX_PATH di-set eksplisit karena find_package(Qt6) butuh ini,
-          :: sekadar menaruh qmake di PATH saja tidak cukup untuk CMake Config mode.
-          cmake ..\qtwebengine -G Ninja -DCMAKE_BUILD_TYPE=Release ^
+          :: Configure CMake to skip QtPdf
+          cmake "%GITHUB_WORKSPACE%\qtwebengine" -G Ninja -DCMAKE_BUILD_TYPE=Release ^
             -DCMAKE_PREFIX_PATH="%QT_DIR%" ^
             -DQT_FEATURE_webengine_proprietary_codecs=ON ^
-            -DQT_FEATURE_qtpdf_build=OFF ^            
+            -DQT_FEATURE_qtpdf_build=OFF ^
             -DCMAKE_INSTALL_PREFIX="%GITHUB_WORKSPACE%\output"
 
           :: Throttle parallelism to prevent runner memory exhaustion
