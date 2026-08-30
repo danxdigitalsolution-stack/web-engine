@@ -38,7 +38,7 @@ jobs:
         shell: bash
         run: |
           # Melakukan clone repositori Qt WebEngine secara rekursif (untuk submodule Chromium internal)
-          git clone https://qt.io --branch v6.11.2 --recursive --depth 1
+          git clone https://code.qt.io/qt/qtwebengine.git --branch v6.11.2 --recursive --depth 1
 
       - name: Configure and Build Qt WebEngine (MSVC)
         shell: cmd
