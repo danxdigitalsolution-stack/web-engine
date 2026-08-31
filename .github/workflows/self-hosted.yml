@@ -152,10 +152,18 @@ jobs:
       - name: Configure and Build Qt WebEngine (MSVC)
         shell: cmd
         run: |
-          :: Activate MSVC 2022 environment
+          :: Cari vcvars64.bat otomatis pakai vswhere (bawaan installer VS), jadi
+          :: nggak peduli edisi Visual Studio apa yang keinstall di runner ini
+          :: (Community/Professional/Enterprise/Build Tools) -- penting karena
+          :: mesin self-hosted bisa beda-beda instalasinya tergantung yang dipakai.
+          for /f "usebackq tokens=*" %%i in (`"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VS_PATH=%%i"
+          if not defined VS_PATH (
+            echo Visual Studio dengan C++ build tools tidak ditemukan di runner ini.
+            exit /b 1
+          )
           :: SDK 26100 di-set eksplisit sebagai argumen supaya vcvars tidak salah
           :: pilih SDK lain yang lebih lama.
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat" 10.0.26100.0
+          call "%VS_PATH%\VC\Auxiliary\Build\vcvars64.bat" 10.0.26100.0
 
           :: Create a short build path to avoid MAX_PATH limits
           :: PENTING: karena self-hosted, C:\b PERSISTEN antar run -- ini memungkinkan
