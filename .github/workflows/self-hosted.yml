@@ -149,6 +149,23 @@ jobs:
           echo "Clone tetap gagal setelah $MAX_RETRIES percobaan."
           exit 1
 
+      - name: Hitung level --parallel yang aman
+        shell: pwsh
+        run: |
+          # Dihitung dari CPU DAN RAM, bukan cuma jumlah core -- karena linking
+          # MSVC/Chromium boros RAM per job paralel (kira-kira 2GB per job untuk
+          # build seberat ini). Ini bikin workflow aman dipakai di runner manapun
+          # (PC monster, VPS, PC sewaan) tanpa perlu disetel ulang manual tiap ganti mesin.
+          $cores = [Environment]::ProcessorCount
+          $ramGB = [Math]::Floor((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
+
+          $byCpu = [Math]::Max(1, $cores - 1)
+          $byRam = [Math]::Max(1, [Math]::Floor($ramGB / 2))
+          $parallel = [Math]::Min($byCpu, $byRam)
+
+          Write-Host "Runner ini: $cores core, ${ramGB}GB RAM -> --parallel $parallel"
+          "BUILD_PARALLEL=$parallel" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Configure and Build Qt WebEngine (MSVC)
         shell: cmd
         run: |
@@ -202,13 +219,11 @@ jobs:
             -DQT_FEATURE_webengine_kerberos=OFF ^
             -DCMAKE_INSTALL_PREFIX="%GITHUB_WORKSPACE%\output"
 
-          :: PC monster, jadi --parallel dihitung otomatis dari jumlah logical
-          :: processor yang beneran ada di mesin ini (sisain 1 core buat OS/runner
-          :: service-nya sendiri), bukan hardcode angka kecil kayak di hosted runner.
-          set /a "PARALLEL=%NUMBER_OF_PROCESSORS%-1"
-          if %PARALLEL% LSS 1 set PARALLEL=1
-          echo Build dengan --parallel %PARALLEL% (dari %NUMBER_OF_PROCESSORS% logical processor)
-          cmake --build . --parallel %PARALLEL%
+          :: PC monster, jadi --parallel dihitung otomatis dari kombinasi CPU+RAM
+          :: runner ini (lihat step "Hitung level --parallel yang aman" di atas),
+          :: bukan hardcode angka kecil kayak di hosted runner.
+          echo Build dengan --parallel %BUILD_PARALLEL%
+          cmake --build . --parallel %BUILD_PARALLEL%
           cmake --install .
 
       - name: Archive Windows Binaries
