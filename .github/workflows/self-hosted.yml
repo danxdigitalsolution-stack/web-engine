@@ -1,0 +1,221 @@
+name: Build Qt WebEngine 6.11.x Windows with Codecs
+
+on:
+  push:
+    tags:
+      - 'v*' # Otomatis berjalan jika Anda membuat tag versi baru (misal: v1.0.0)
+  workflow_dispatch: # Memungkinkan tombol manual di tab Actions GitHub
+
+jobs:
+  build-windows:
+    # Self-hosted: PC sendiri, jadi TIDAK ADA batas 6 jam kayak hosted runner,
+    # dan workspace-nya PERSISTEN antar run (nggak fresh-VM tiap kali kayak
+    # windows-2022 hosted). Ini kita manfaatkan di bawah: Qt SDK, source clone,
+    # dan folder build C:\b semuanya di-reuse antar run kalau masih valid,
+    # jadi rerun berikutnya jauh lebih cepat (Ninja incremental build beneran jalan).
+    runs-on: self-hosted
+    permissions:
+      contents: write # Wajib agar bot bisa mengunggah file ke tab GitHub Releases
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install Build Tools via Chocolatey
+        run: |
+          # PENTING: paket choco "flex" dan "bison" sudah lama dikenal bermasalah/broken
+          # di Windows (link download basi). Ganti pakai winflexbison3, yang menyediakan
+          # win_flex.exe/win_bison.exe -- lalu di-rename ke flex.exe/bison.exe di step
+          # berikutnya, karena QtWebEngine configure cari nama itu persis.
+          choco install ninja gperf winflexbison3 nasm strawberryperl -y
+          # Pastikan Node.js terinstal untuk engine Chromium
+          choco install nodejs-lts -y
+
+      - name: Rename win_flex/win_bison and expose on PATH
+        shell: pwsh
+        run: |
+          $wfbDir = "C:\ProgramData\chocolatey\lib\winflexbison3\tools"
+          if (-not (Test-Path $wfbDir)) {
+            # Fallback: cari otomatis kalau lokasi paket berubah
+            $wfbDir = (Get-ChildItem "C:\ProgramData\chocolatey\lib\winflexbison3" -Recurse -Filter "win_flex.exe" | Select-Object -First 1).DirectoryName
+          }
+          if (-not $wfbDir) { throw "Tidak menemukan folder instalasi winflexbison3" }
+
+          Copy-Item (Join-Path $wfbDir "win_flex.exe") (Join-Path $wfbDir "flex.exe") -Force
+          Copy-Item (Join-Path $wfbDir "win_bison.exe") (Join-Path $wfbDir "bison.exe") -Force
+
+          Write-Host "flex/bison siap di: $wfbDir"
+          $wfbDir | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Install Windows 11 SDK 26100
+        uses: ChristopheLav/windows-sdk-install@v1
+        with:
+          version-sdk: "26100"
+          features: "OptionId.DesktopCPPx64,OptionId.DesktopCPPx86"
+
+      - name: Pin CMake to a known-good version
+        uses: lukka/get-cmake@latest
+        with:
+          # windows-latest sekarang default bawa CMake 4.1+, yang punya regresi:
+          # file(INSTALL) salah nge-flag artefak Qt (DLL/qmltypes) yang valid sebagai
+          # "File exists" saat cmake --install (lihat forum.qt.io/topic/163162, dikonfirmasi
+          # oleh Qt Company sendiri sebagai bug di CMake 4.1.1, bukan di project Qt-nya).
+          # Pin ke 3.29.x yang belum kena bug ini.
+          cmakeVersion: "3.29.6"
+
+      - name: Install Qt Base SDK via aqtinstall
+        shell: pwsh
+        run: |
+          # QtWebEngine configure butuh modul Python html5lib; kalau tidak ada,
+          # konfigurasi diam-diam menonaktifkan build WebEngine (bukan error keras di awal).
+          pip install html5lib
+
+          # PyPI release 3.3.0 belum berisi fix untuk perubahan struktur folder Qt 6.11+
+          # (lihat https://github.com/miurahr/aqtinstall/pull/1000, sudah merged ke master
+          # tapi belum dirilis). Install langsung dari GitHub master sebagai workaround.
+          pip install -U "git+https://github.com/miurahr/aqtinstall.git@master"
+
+          # Karena workspace self-hosted persisten, cek dulu apakah Qt sudah pernah
+          # ke-install dari run sebelumnya sebelum download ulang (hemat waktu + kuota).
+          $qtVersionDir = Get-ChildItem "$env:GITHUB_WORKSPACE\Qt" -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^6\.11\.\d+$' } |
+            Sort-Object Name -Descending |
+            Select-Object -First 1
+
+          if ($qtVersionDir -and (Test-Path (Join-Path $qtVersionDir.FullName "msvc2022_64"))) {
+            Write-Host "Qt $($qtVersionDir.Name) sudah ada di runner ini, skip download."
+          } else {
+            # Cek versi 6.11.x apa saja yang benar-benar sudah dipublish di repo aqt
+            aqt list-qt windows desktop --spec "6.11"
+            # Mengunduh Qt Base terbaru dari seri 6.11 (tanpa -m qtwebengine karena kita build dari source)
+            # PENTING: --outputdir di-set eksplisit ke "Qt" karena default aqt SEBENARNYA
+            # adalah "./<version>/<arch>" (TANPA folder "Qt"), bukan "./Qt/<version>/<arch>"
+            # seperti asumsi sebelumnya — itu yang bikin Get-ChildItem gagal nemuin folder Qt.
+            aqt install-qt windows desktop 6.11 win64_msvc2022_64 --outputdir "$env:GITHUB_WORKSPACE\Qt"
+
+            $qtVersionDir = Get-ChildItem "$env:GITHUB_WORKSPACE\Qt" -Directory |
+              Where-Object { $_.Name -match '^6\.11\.\d+$' } |
+              Sort-Object Name -Descending |
+              Select-Object -First 1
+          }
+          if (-not $qtVersionDir) { throw "Gagal mendeteksi folder versi Qt hasil instalasi aqt" }
+
+          $qtDir = Join-Path $qtVersionDir.FullName "msvc2022_64"
+          if (-not (Test-Path $qtDir)) { throw "Folder toolchain Qt tidak ditemukan: $qtDir" }
+
+          Write-Host "Qt terinstall di: $qtDir (versi $($qtVersionDir.Name))"
+
+          # Simpan sebagai env var supaya step-step berikutnya (termasuk shell cmd)
+          # tidak perlu menebak-nebak path lagi.
+          "QT_DIR=$qtDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "QT_VERSION=$($qtVersionDir.Name)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "$qtDir\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Clone Qt WebEngine Source
+        shell: bash
+        run: |
+          # Workspace self-hosted persisten: kalau source sudah pernah di-clone dan
+          # tag-nya masih cocok dengan QT_VERSION sekarang, skip clone (hemat banyak
+          # waktu, submodule Chromium-nya berat). Kalau beda/rusak, clone ulang.
+          if [ -d "qtwebengine/.git" ]; then
+            CURRENT_TAG=$(git -C qtwebengine describe --tags --exact-match 2>/dev/null || echo "")
+            if [ "$CURRENT_TAG" = "v${QT_VERSION}" ]; then
+              echo "Source qtwebengine sudah ada dan sesuai versi (v${QT_VERSION}), skip clone."
+              exit 0
+            fi
+            echo "Source ada tapi versinya beda (ada: $CURRENT_TAG, butuh: v${QT_VERSION}), clone ulang."
+          fi
+
+          # code.qt.io kadang overload (HTTP 503) pas nge-fetch submodule Chromium
+          # (src/3rdparty) yang ukurannya gede, bikin packfile transfer keputus di tengah.
+          # Ini transient, jadi kita retry otomatis alih-alih langsung fail.
+          MAX_RETRIES=5
+          DELAY=30
+          for i in $(seq 1 $MAX_RETRIES); do
+            echo "Percobaan clone ke-$i dari $MAX_RETRIES..."
+            rm -rf qtwebengine
+            if git clone https://code.qt.io/qt/qtwebengine.git --branch "v${QT_VERSION}" --recursive --depth 1; then
+              echo "Clone berhasil."
+              exit 0
+            fi
+            echo "Clone gagal (percobaan $i), tunggu ${DELAY}s sebelum retry..."
+            sleep $DELAY
+          done
+          echo "Clone tetap gagal setelah $MAX_RETRIES percobaan."
+          exit 1
+
+      - name: Configure and Build Qt WebEngine (MSVC)
+        shell: cmd
+        run: |
+          :: Activate MSVC 2022 environment
+          :: SDK 26100 di-set eksplisit sebagai argumen supaya vcvars tidak salah
+          :: pilih SDK lain yang lebih lama.
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat" 10.0.26100.0
+
+          :: Create a short build path to avoid MAX_PATH limits
+          :: PENTING: karena self-hosted, C:\b PERSISTEN antar run -- ini memungkinkan
+          :: Ninja incremental build beneran (jauh lebih cepat dari rebuild total).
+          :: Tapi kalau versi Qt berubah dari run sebelumnya, folder build lama nggak
+          :: valid lagi dan HARUS di-reset, jadi kita cek marker versi dulu.
+          if not exist C:\b mkdir C:\b
+          set "VERSION_MARKER=C:\b\.qt_version_marker"
+          set "LAST_QT_VERSION="
+          if exist "%VERSION_MARKER%" set /p LAST_QT_VERSION=<"%VERSION_MARKER%"
+          if not "%LAST_QT_VERSION%"=="%QT_VERSION%" (
+            echo Versi Qt berubah dari [%LAST_QT_VERSION%] ke [%QT_VERSION%], reset folder build.
+            rmdir /s /q C:\b
+            mkdir C:\b
+          )
+          echo %QT_VERSION%>C:\b\.qt_version_marker
+          cd C:\b
+
+          :: Ensure Qt is in the path
+          set "PATH=%QT_DIR%\bin;%PATH%"
+
+          :: Konfigurasi CMake dengan compiler MSVC dan flag Codec Proprietary (H.264, MP4, AAC)
+          :: Fitur-fitur besar yang tidak dipakai (WebRTC, spellchecker, extensions, dst)
+          :: dimatikan untuk memangkas scope compile Chromium -- ini kontributor waktu
+          :: compile terbesar setelah Blink core sendiri. Kalau salah satu ternyata
+          :: dibutuhkan di app lain, tinggal hapus baris -D terkait dan build lagi.
+          cmake "%GITHUB_WORKSPACE%\qtwebengine" -G Ninja -DCMAKE_BUILD_TYPE=Release ^
+            -DCMAKE_PREFIX_PATH="%QT_DIR%" ^
+            -DQT_FEATURE_webengine_proprietary_codecs=ON ^
+            -DQT_FEATURE_qtpdf_build=OFF ^
+            -DQT_FEATURE_webengine_printing_and_pdf=OFF ^
+            -DQT_FEATURE_webengine_spellchecker=OFF ^
+            -DQT_FEATURE_webengine_webrtc=OFF ^
+            -DQT_FEATURE_webengine_extensions=OFF ^
+            -DQT_FEATURE_webengine_geolocation=OFF ^
+            -DQT_FEATURE_webengine_kerberos=OFF ^
+            -DCMAKE_INSTALL_PREFIX="%GITHUB_WORKSPACE%\output"
+
+          :: PC monster, jadi --parallel dihitung otomatis dari jumlah logical
+          :: processor yang beneran ada di mesin ini (sisain 1 core buat OS/runner
+          :: service-nya sendiri), bukan hardcode angka kecil kayak di hosted runner.
+          set /a "PARALLEL=%NUMBER_OF_PROCESSORS%-1"
+          if %PARALLEL% LSS 1 set PARALLEL=1
+          echo Build dengan --parallel %PARALLEL% (dari %NUMBER_OF_PROCESSORS% logical processor)
+          cmake --build . --parallel %PARALLEL%
+          cmake --install .
+
+      - name: Archive Windows Binaries
+        shell: pwsh
+        run: |
+          cd $env:GITHUB_WORKSPACE\output
+          # Kompres hasil build menjadi file ZIP siap pakai
+          # -Force karena workspace self-hosted persisten, zip lama dari run
+          # sebelumnya mungkin masih ada.
+          Compress-Archive -Path * -DestinationPath ..\qtwebengine-windows-$env:QT_VERSION-codecs.zip -Force
+
+      - name: Upload Binary to GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: qtwebengine-windows-${{ env.QT_VERSION }}-codecs.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
